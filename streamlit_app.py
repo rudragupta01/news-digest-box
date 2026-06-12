@@ -21,7 +21,7 @@ SENDER_EMAIL = os.getenv("SENDER_EMAIL")
 SENDER_APP_PASSWORD = os.getenv("SENDER_APP_PASSWORD")
 client = Groq(api_key=GROQ_API_KEY)
 
-FONT_PATH = r"C:\Users\MY HP\NotoSans-Regular.ttf"
+FONT_PATH = "NotoSans-Regular.ttf"
 
 def remove_markdown(text):
     if not text:
