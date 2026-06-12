@@ -42,7 +42,7 @@ def get_news(topic, date_filter):
     else:
         from_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
 
-    url = f"https://content.guardianapis.com/search?q={topic}&from-date={from_date}&page-size=5&order-by=newest&api-key={GUARDIAN_API_KEY}&show-fields=bodyText,trailText"
+    url = f"https://content.guardianapis.com/search?q={topic}&from-date={from_date}&page-size=15&order-by=newest&api-key={GUARDIAN_API_KEY}&show-fields=bodyText,trailText"
     response = requests.get(url)
     data = response.json()
 
@@ -54,9 +54,12 @@ def get_news(topic, date_filter):
 
     articles = []
     for r in results:
+        title = r.get("webTitle", "No title")
+        if topic.lower() not in title.lower():
+            continue
         content = (r.get("fields", {}).get("bodyText", "") or r.get("fields", {}).get("trailText", ""))[:1500]
         articles.append({
-            "title": r.get("webTitle", "No title"),
+            "title": title,
             "content": content,
             "url": r.get("webUrl", ""),
             "publishedAt": r.get("webPublicationDate", "")
