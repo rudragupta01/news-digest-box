@@ -52,9 +52,10 @@ def get_news(topic, date_filter):
 
     articles = []
     for r in results:
+        content = (r.get("fields", {}).get("bodyText", "") or r.get("fields", {}).get("trailText", ""))[:1500]
         articles.append({
             "title": r.get("webTitle", "No title"),
-            "content": r.get("fields", {}).get("bodyText", "") or r.get("fields", {}).get("trailText", ""),
+            "content": content,
             "url": r.get("webUrl", ""),
             "publishedAt": r.get("webPublicationDate", "")
         })
@@ -66,22 +67,28 @@ def summarize_article(title, content, language):
         prompt = f"Summarize this news article in 3 bullet points in English. Do not use any markdown formatting like ** or ##.\n\nTitle: {title}\n\nContent: {content}"
     else:
         prompt = f"You must respond ONLY in {language} language. Summarize this news article in 3 bullet points in {language}. Do not use any markdown formatting like ** or ##.\n\nTitle: {title}\n\nContent: {content}"
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return response.choices[0].message.content
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"(Summary unavailable due to API limit: {e})"
 
 def get_takeaways(all_summaries, language):
     if language == "English":
         prompt = f"Based on these news summaries, give me 5 key takeaways in English. Do not use any markdown formatting like ** or ##.\n\n{all_summaries}"
     else:
         prompt = f"You must respond ONLY in {language} language. Based on these news summaries, give me 5 key takeaways in {language}. Do not use any markdown formatting like ** or ##.\n\n{all_summaries}"
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return response.choices[0].message.content
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"(Takeaways unavailable due to API limit: {e})"
 
 def generate_pdf(topic, articles_data, takeaways):
     pdf = FPDF()
