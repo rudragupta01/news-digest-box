@@ -9,6 +9,7 @@ from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
 import re
+import time
 from dotenv import load_dotenv
 import os
 
@@ -171,7 +172,9 @@ if st.button("Generate Digest"):
                     with st.expander(f"Article {i+1}: {title} | {published_at}"):
                         st.write(summary)
                         st.markdown(f"[Read full article]({url})")
+                    time.sleep(2)
                 st.subheader("Key Takeaways")
+                time.sleep(12)
                 takeaways = get_takeaways(all_summaries, language)
                 st.write(takeaways)
                 st.divider()
