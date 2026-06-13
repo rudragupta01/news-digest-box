@@ -69,6 +69,34 @@ def call_llm(prompt):
                 return f"(AI summary unavailable. Groq error: {groq_error}. Gemini error: {gemini_error})"
         return f"(AI summary unavailable due to API limit: {groq_error})"
 
+def find_best_tag(keyword, category_section):
+    """Look up the most relevant Guardian tag for a given keyword, scoped to a section."""
+    try:
+        response = requests.get(
+            "https://content.guardianapis.com/tags",
+            params={
+                "q": keyword,
+                "type": "keyword",
+                "section": category_section,
+                "page-size": 5,
+                "api-key": GUARDIAN_API_KEY
+            },
+            timeout=10
+        )
+        response.raise_for_status()
+        data = response.json()
+        results = data.get("response", {}).get("results", [])
+        for tag in results:
+            tag_id = tag.get("id", "")
+            web_title = tag.get("webTitle", "").lower()
+            if keyword.lower() == web_title or keyword.lower() in web_title:
+                return tag_id
+        if results:
+            return results[0].get("id")
+    except Exception:
+        pass
+    return None
+
 def get_news(category_section, keyword, date_filter):
     if date_filter == "Today":
         from_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -79,15 +107,22 @@ def get_news(category_section, keyword, date_filter):
 
     base_url = "https://content.guardianapis.com/search"
     params = {
-        "section": category_section,
         "from-date": from_date,
-        "page-size": 50,
+        "page-size": 20,
         "order-by": "newest",
         "api-key": GUARDIAN_API_KEY,
         "show-fields": "bodyText,trailText"
     }
+
     if keyword:
-        params["q"] = keyword
+        tag = find_best_tag(keyword, category_section)
+        if tag:
+            params["tag"] = tag
+        else:
+            params["section"] = category_section
+            params["q"] = keyword
+    else:
+        params["section"] = category_section
 
     try:
         response = requests.get(base_url, params=params, timeout=10)
@@ -109,8 +144,6 @@ def get_news(category_section, keyword, date_filter):
     articles = []
     for r in results:
         title = r.get("webTitle", "No title")
-        if keyword and keyword.lower() not in title.lower():
-            continue
         full_content = r.get("fields", {}).get("bodyText", "") or r.get("fields", {}).get("trailText", "")
         articles.append({
             "title": title,
