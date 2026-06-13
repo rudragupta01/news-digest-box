@@ -1,5 +1,6 @@
 import requests
 from groq import Groq
+import google.generativeai as genai
 import streamlit as st
 from datetime import datetime, timedelta
 from fpdf import FPDF
@@ -15,12 +16,20 @@ import os
 load_dotenv()
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 GUARDIAN_API_KEY = os.getenv("GUARDIAN_API_KEY")
 SENDER_EMAIL = os.getenv("SENDER_EMAIL")
 SENDER_APP_PASSWORD = os.getenv("SENDER_APP_PASSWORD")
+
 client = Groq(api_key=GROQ_API_KEY)
 
+gemini_model = None
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    gemini_model = genai.GenerativeModel("gemini-2.5-flash-lite")
+
+GROQ_MODEL = "llama-3.3-70b-versatile"
 FONT_PATH = "NotoSans-Regular.ttf"
 
 def remove_markdown(text):
@@ -32,6 +41,23 @@ def remove_markdown(text):
     text = re.sub(r'`(.*?)`', r'\1', text)
     return text.strip()
 
+def call_llm(prompt):
+    """Try Groq first; fall back to Gemini if Groq fails."""
+    try:
+        response = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content
+    except Exception as groq_error:
+        if gemini_model:
+            try:
+                response = gemini_model.generate_content(prompt)
+                return response.text
+            except Exception as gemini_error:
+                return f"(AI summary unavailable. Groq error: {groq_error}. Gemini error: {gemini_error})"
+        return f"(AI summary unavailable due to API limit: {groq_error})"
+
 def get_news(topic, date_filter):
     if date_filter == "Today":
         from_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -40,9 +66,26 @@ def get_news(topic, date_filter):
     else:
         from_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
 
-    url = f"https://content.guardianapis.com/search?q={topic}&from-date={from_date}&page-size=15&order-by=newest&api-key={GUARDIAN_API_KEY}&show-fields=bodyText,trailText"
-    response = requests.get(url)
-    data = response.json()
+    base_url = "https://content.guardianapis.com/search"
+    params = {
+        "q": topic,
+        "from-date": from_date,
+        "page-size": 15,
+        "order-by": "newest",
+        "api-key": GUARDIAN_API_KEY,
+        "show-fields": "bodyText,trailText"
+    }
+
+    try:
+        response = requests.get(base_url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"Could not reach the news service. Please try again later. ({e})")
+        return []
+    except ValueError:
+        st.error("Received an invalid response from the news service. Please try again later.")
+        return []
 
     if data.get("response", {}).get("status") != "ok":
         st.error(f"Guardian API error: {data}")
@@ -53,12 +96,12 @@ def get_news(topic, date_filter):
     articles = []
     for r in results:
         title = r.get("webTitle", "No title")
-        if topic.lower() not in title.lower():
+        full_content = r.get("fields", {}).get("bodyText", "") or r.get("fields", {}).get("trailText", "")
+        if topic.lower() not in title.lower() and topic.lower() not in full_content.lower():
             continue
-        content = (r.get("fields", {}).get("bodyText", "") or r.get("fields", {}).get("trailText", ""))[:1500]
         articles.append({
             "title": title,
-            "content": content,
+            "content": full_content[:1500],
             "url": r.get("webUrl", ""),
             "publishedAt": r.get("webPublicationDate", "")
         })
@@ -70,28 +113,14 @@ def summarize_article(title, content, language):
         prompt = f"Summarize this news article in 3 bullet points in English. Do not use any markdown formatting like ** or ##.\n\nTitle: {title}\n\nContent: {content}"
     else:
         prompt = f"You must respond ONLY in {language} language. Summarize this news article in 3 bullet points in {language}. Do not use any markdown formatting like ** or ##.\n\nTitle: {title}\n\nContent: {content}"
-    try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        return f"(Summary unavailable due to API limit: {e})"
+    return call_llm(prompt)
 
 def get_takeaways(all_summaries, language):
     if language == "English":
-        prompt = f"Based on these news summaries, give me 5 key takeaways in English. Do not use any markdown formatting like ** or ##.\n\n{all_summaries}"
+        prompt = f"Based on these news summaries, give me 5 key takeaways in English. Format each takeaway as a separate line starting with '- '. Do not use any other markdown formatting like ** or ##.\n\n{all_summaries}"
     else:
-        prompt = f"You must respond ONLY in {language} language. Based on these news summaries, give me 5 key takeaways in {language}. Do not use any markdown formatting like ** or ##.\n\n{all_summaries}"
-    try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        return f"(Takeaways unavailable due to API limit: {e})"
+        prompt = f"You must respond ONLY in {language} language. Based on these news summaries, give me 5 key takeaways in {language}. Format each takeaway as a separate line starting with '- '. Do not use any other markdown formatting like ** or ##.\n\n{all_summaries}"
+    return call_llm(prompt)
 
 def generate_pdf(topic, articles_data, takeaways):
     pdf = FPDF()
@@ -164,9 +193,9 @@ if st.button("Generate Digest"):
             if not articles:
                 st.warning("No articles found. Try a different topic or filter.")
             else:
-                for i, article in enumerate(articles[:5]):
+                for i, article in enumerate(articles[:3]):
                     title = article.get("title", "No title")
-                    content = article.get("content") or article.get("description") or article.get("title") or "No content"
+                    content = article.get("content") or article.get("title") or "No content"
                     published_at = article.get("publishedAt", "")[:10]
                     url = article.get("url", "")
                     summary = summarize_article(title, content, language)
@@ -177,7 +206,7 @@ if st.button("Generate Digest"):
                         st.markdown(f"[Read full article]({url})")
                 st.subheader("Key Takeaways")
                 takeaways = get_takeaways(all_summaries, language)
-                st.write(takeaways)
+                st.markdown(takeaways)
                 st.divider()
                 pdf_data = generate_pdf(topic, articles_data, takeaways)
                 st.download_button(

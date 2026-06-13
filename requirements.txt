@@ -1,5 +1,6 @@
 streamlit
 groq
+google-generativeai
 requests
 fpdf2
 python-dotenv
