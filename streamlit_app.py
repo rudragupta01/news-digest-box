@@ -53,7 +53,6 @@ def remove_markdown(text):
     return text.strip()
 
 def call_llm(prompt):
-    """Try Groq first; fall back to Gemini if Groq fails."""
     try:
         response = client.chat.completions.create(
             model=GROQ_MODEL,
@@ -70,15 +69,12 @@ def call_llm(prompt):
         return f"(AI summary unavailable due to API limit: {groq_error})"
 
 def find_best_tag(keyword, category_section):
-    """Look up the most relevant Guardian tag for a given keyword, scoped to a section."""
     try:
         response = requests.get(
             "https://content.guardianapis.com/tags",
             params={
                 "q": keyword,
-                "type": "keyword",
-                "section": category_section,
-                "page-size": 5,
+                "page-size": 10,
                 "api-key": GUARDIAN_API_KEY
             },
             timeout=10
@@ -86,11 +82,25 @@ def find_best_tag(keyword, category_section):
         response.raise_for_status()
         data = response.json()
         results = data.get("response", {}).get("results", [])
+
         for tag in results:
             tag_id = tag.get("id", "")
             web_title = tag.get("webTitle", "").lower()
-            if keyword.lower() == web_title or keyword.lower() in web_title:
+            if tag_id.startswith(f"{category_section}/") and keyword.lower() == web_title:
                 return tag_id
+
+        for tag in results:
+            tag_id = tag.get("id", "")
+            web_title = tag.get("webTitle", "").lower()
+            if tag_id.startswith(f"{category_section}/") and keyword.lower() in web_title:
+                return tag_id
+
+        for tag in results:
+            tag_id = tag.get("id", "")
+            web_title = tag.get("webTitle", "").lower()
+            if keyword.lower() == web_title:
+                return tag_id
+
         if results:
             return results[0].get("id")
     except Exception:
@@ -114,10 +124,12 @@ def get_news(category_section, keyword, date_filter):
         "show-fields": "bodyText,trailText"
     }
 
+    tag_used = None
     if keyword:
         tag = find_best_tag(keyword, category_section)
         if tag:
             params["tag"] = tag
+            tag_used = tag
         else:
             params["section"] = category_section
             params["q"] = keyword
@@ -140,6 +152,18 @@ def get_news(category_section, keyword, date_filter):
         return []
 
     results = data.get("response", {}).get("results", [])
+
+    if not results and tag_used:
+        params.pop("tag", None)
+        params["section"] = category_section
+        params["q"] = keyword
+        try:
+            response = requests.get(base_url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            results = data.get("response", {}).get("results", [])
+        except Exception:
+            pass
 
     articles = []
     for r in results:
