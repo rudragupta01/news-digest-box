@@ -1,5 +1,5 @@
 import requests
-import google.generativeai as genai
+from groq import Groq
 import streamlit as st
 from datetime import datetime, timedelta
 from fpdf import FPDF
@@ -9,20 +9,17 @@ from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
 import re
-import time
 from dotenv import load_dotenv
 import os
 
 load_dotenv()
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 GUARDIAN_API_KEY = os.getenv("GUARDIAN_API_KEY")
 SENDER_EMAIL = os.getenv("SENDER_EMAIL")
 SENDER_APP_PASSWORD = os.getenv("SENDER_APP_PASSWORD")
-
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-2.5-flash")
+client = Groq(api_key=GROQ_API_KEY)
 
 FONT_PATH = "NotoSans-Regular.ttf"
 
@@ -74,8 +71,11 @@ def summarize_article(title, content, language):
     else:
         prompt = f"You must respond ONLY in {language} language. Summarize this news article in 3 bullet points in {language}. Do not use any markdown formatting like ** or ##.\n\nTitle: {title}\n\nContent: {content}"
     try:
-        response = model.generate_content(prompt)
-        return response.text
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content
     except Exception as e:
         return f"(Summary unavailable due to API limit: {e})"
 
@@ -85,8 +85,11 @@ def get_takeaways(all_summaries, language):
     else:
         prompt = f"You must respond ONLY in {language} language. Based on these news summaries, give me 5 key takeaways in {language}. Do not use any markdown formatting like ** or ##.\n\n{all_summaries}"
     try:
-        response = model.generate_content(prompt)
-        return response.text
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content
     except Exception as e:
         return f"(Takeaways unavailable due to API limit: {e})"
 
@@ -172,9 +175,7 @@ if st.button("Generate Digest"):
                     with st.expander(f"Article {i+1}: {title} | {published_at}"):
                         st.write(summary)
                         st.markdown(f"[Read full article]({url})")
-                    time.sleep(2)
                 st.subheader("Key Takeaways")
-                time.sleep(12)
                 takeaways = get_takeaways(all_summaries, language)
                 st.write(takeaways)
                 st.divider()
