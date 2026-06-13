@@ -32,6 +32,17 @@ if GEMINI_API_KEY:
 GROQ_MODEL = "llama-3.3-70b-versatile"
 FONT_PATH = "NotoSans-Regular.ttf"
 
+CATEGORIES = {
+    "Technology": "technology",
+    "Sports": "sport",
+    "Business & Finance": "business",
+    "Politics": "politics",
+    "World News": "world",
+    "Science & Environment": "environment",
+    "Health & Fitness": "lifeandstyle",
+    "Entertainment & Culture": "culture",
+}
+
 def remove_markdown(text):
     if not text:
         return ""
@@ -58,7 +69,7 @@ def call_llm(prompt):
                 return f"(AI summary unavailable. Groq error: {groq_error}. Gemini error: {gemini_error})"
         return f"(AI summary unavailable due to API limit: {groq_error})"
 
-def get_news(topic, date_filter):
+def get_news(category_section, keyword, date_filter):
     if date_filter == "Today":
         from_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     elif date_filter == "This Week":
@@ -68,13 +79,15 @@ def get_news(topic, date_filter):
 
     base_url = "https://content.guardianapis.com/search"
     params = {
-        "q": topic,
+        "section": category_section,
         "from-date": from_date,
-        "page-size": 15,
+        "page-size": 50,
         "order-by": "newest",
         "api-key": GUARDIAN_API_KEY,
         "show-fields": "bodyText,trailText"
     }
+    if keyword:
+        params["q"] = keyword
 
     try:
         response = requests.get(base_url, params=params, timeout=10)
@@ -96,9 +109,9 @@ def get_news(topic, date_filter):
     articles = []
     for r in results:
         title = r.get("webTitle", "No title")
-        full_content = r.get("fields", {}).get("bodyText", "") or r.get("fields", {}).get("trailText", "")
-        if topic.lower() not in title.lower() and topic.lower() not in full_content.lower():
+        if keyword and keyword.lower() not in title.lower():
             continue
+        full_content = r.get("fields", {}).get("bodyText", "") or r.get("fields", {}).get("trailText", "")
         articles.append({
             "title": title,
             "content": full_content[:1500],
@@ -122,13 +135,13 @@ def get_takeaways(all_summaries, language):
         prompt = f"You must respond ONLY in {language} language. Based on these news summaries, give me 5 key takeaways in {language}. Format each takeaway as a separate line starting with '- '. Do not use any other markdown formatting like ** or ##.\n\n{all_summaries}"
     return call_llm(prompt)
 
-def generate_pdf(topic, articles_data, takeaways):
+def generate_pdf(topic_label, articles_data, takeaways):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_margins(15, 15, 15)
     pdf.add_font("NotoSans", "", FONT_PATH, uni=True)
     pdf.set_font("NotoSans", "", 16)
-    pdf.cell(0, 10, f"News Digest: {topic}", ln=True)
+    pdf.cell(0, 10, f"News Digest: {topic_label}", ln=True)
     pdf.set_font("NotoSans", "", 10)
     pdf.cell(0, 8, f"Generated on: {datetime.now().strftime('%Y-%m-%d')}", ln=True)
     pdf.ln(5)
@@ -148,19 +161,19 @@ def generate_pdf(topic, articles_data, takeaways):
     pdf.multi_cell(0, 7, remove_markdown(takeaways))
     return bytes(pdf.output())
 
-def send_email(recipient_email, topic, articles_data, takeaways):
+def send_email(recipient_email, topic_label, articles_data, takeaways):
     try:
-        pdf_data = generate_pdf(topic, articles_data, takeaways)
+        pdf_data = generate_pdf(topic_label, articles_data, takeaways)
         msg = MIMEMultipart()
         msg['From'] = SENDER_EMAIL
         msg['To'] = recipient_email
-        msg['Subject'] = f"Daily News Digest: {topic} - {datetime.now().strftime('%Y-%m-%d')}"
-        body = f"Hi,\n\nHere is your daily news digest on '{topic}'.\n\nKey Takeaways:\n{remove_markdown(takeaways)}\n\nFind the full digest attached as a PDF.\n\nPowered by AI News Digest Bot"
+        msg['Subject'] = f"Daily News Digest: {topic_label} - {datetime.now().strftime('%Y-%m-%d')}"
+        body = f"Hi,\n\nHere is your daily news digest on '{topic_label}'.\n\nKey Takeaways:\n{remove_markdown(takeaways)}\n\nFind the full digest attached as a PDF.\n\nPowered by AI News Digest Bot"
         msg.attach(MIMEText(body, 'plain'))
         part = MIMEBase('application', 'octet-stream')
         part.set_payload(pdf_data)
         encoders.encode_base64(part)
-        part.add_header('Content-Disposition', f'attachment; filename=news_digest_{topic}.pdf')
+        part.add_header('Content-Disposition', f'attachment; filename=news_digest_{topic_label}.pdf')
         msg.attach(part)
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
@@ -174,53 +187,54 @@ def send_email(recipient_email, topic, articles_data, takeaways):
 
 st.set_page_config(page_title="AI News Digest Bot", page_icon="📰", layout="wide")
 st.title("📰 AI News Digest Bot")
-st.write("Enter a topic and get an AI-powered news summary instantly.")
+st.write("Pick a category and (optionally) a specific topic to get an AI-powered news summary.")
 
 language = st.selectbox("Select Summary Language:", ["English", "Hindi", "Spanish", "French", "German"])
 date_filter = st.selectbox("Select News From:", ["Today", "This Week", "This Month"])
-topic = st.text_input("Enter a topic:", placeholder="e.g. artificial intelligence, bitcoin, cricket")
+category_label = st.selectbox("Select Category:", list(CATEGORIES.keys()))
+keyword = st.text_input("Optional: narrow down with a specific topic (e.g. cricket, bitcoin, elections)", placeholder="Leave blank for general category news")
 
 st.subheader("Email Digest")
 recipient_email = st.text_input("Enter email to send digest to:", placeholder="example@gmail.com")
 
 if st.button("Generate Digest"):
-    if topic:
-        with st.spinner("Fetching and summarizing news..."):
-            articles = get_news(topic, date_filter)
-            all_summaries = ""
-            articles_data = []
-            st.subheader(f"News Digest: {topic}")
-            if not articles:
-                st.warning("No articles found. Try a different topic or filter.")
-            else:
-                for i, article in enumerate(articles[:3]):
-                    title = article.get("title", "No title")
-                    content = article.get("content") or article.get("title") or "No content"
-                    published_at = article.get("publishedAt", "")[:10]
-                    url = article.get("url", "")
-                    summary = summarize_article(title, content, language)
-                    all_summaries += summary + "\n\n"
-                    articles_data.append((title, summary, url, published_at))
-                    with st.expander(f"Article {i+1}: {title} | {published_at}"):
-                        st.write(summary)
-                        st.markdown(f"[Read full article]({url})")
-                st.subheader("Key Takeaways")
-                takeaways = get_takeaways(all_summaries, language)
-                st.markdown(takeaways)
-                st.divider()
-                pdf_data = generate_pdf(topic, articles_data, takeaways)
-                st.download_button(
-                    label="Download Digest as PDF",
-                    data=pdf_data,
-                    file_name=f"news_digest_{topic}_{datetime.now().strftime('%Y%m%d')}.pdf",
-                    mime="application/pdf"
-                )
-                if recipient_email:
-                    with st.spinner("Sending email..."):
-                        success = send_email(recipient_email, topic, articles_data, takeaways)
-                        if success:
-                            st.success(f"Digest sent to {recipient_email}!")
-                        else:
-                            st.error("Failed to send email. Check your credentials.")
-    else:
-        st.warning("Please enter a topic first!")
+    category_section = CATEGORIES[category_label]
+    topic_label = f"{category_label}" + (f" - {keyword}" if keyword else "")
+
+    with st.spinner("Fetching and summarizing news..."):
+        articles = get_news(category_section, keyword, date_filter)
+        all_summaries = ""
+        articles_data = []
+        st.subheader(f"News Digest: {topic_label}")
+        if not articles:
+            st.warning("No articles found. Try a different category, keyword, or filter.")
+        else:
+            for i, article in enumerate(articles[:3]):
+                title = article.get("title", "No title")
+                content = article.get("content") or article.get("title") or "No content"
+                published_at = article.get("publishedAt", "")[:10]
+                url = article.get("url", "")
+                summary = summarize_article(title, content, language)
+                all_summaries += summary + "\n\n"
+                articles_data.append((title, summary, url, published_at))
+                with st.expander(f"Article {i+1}: {title} | {published_at}"):
+                    st.write(summary)
+                    st.markdown(f"[Read full article]({url})")
+            st.subheader("Key Takeaways")
+            takeaways = get_takeaways(all_summaries, language)
+            st.markdown(takeaways)
+            st.divider()
+            pdf_data = generate_pdf(topic_label, articles_data, takeaways)
+            st.download_button(
+                label="Download Digest as PDF",
+                data=pdf_data,
+                file_name=f"news_digest_{category_section}_{datetime.now().strftime('%Y%m%d')}.pdf",
+                mime="application/pdf"
+            )
+            if recipient_email:
+                with st.spinner("Sending email..."):
+                    success = send_email(recipient_email, topic_label, articles_data, takeaways)
+                    if success:
+                        st.success(f"Digest sent to {recipient_email}!")
+                    else:
+                        st.error("Failed to send email. Check your credentials.")
